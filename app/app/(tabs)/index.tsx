@@ -1,75 +1,113 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { HelloWave } from '@/components/HelloWave';
-import ParallaxScrollView from '@/components/ParallaxScrollView';
+import { SafeAreaView, StyleSheet, View, ImageBackground, Image } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 
-export default function HomeScreen() {
+export default function DashboardScreen() {
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#0d0d0d' }}>
+      {/* Hero Header */}
+      <ImageBackground
+        source={require('@/assets/images/test1.png')}
+        style={styles.header}
+        resizeMode="cover"
+      >
+        <ThemedText type="title" style={styles.title}>
+          University Dashboard
+        </ThemedText>
+        <ThemedText style={styles.subtitle}>
+          🍵 A matcha a day keeps life’s worries at bay
+        </ThemedText>
+      </ImageBackground>
+
+      {/* Content */}
+      <View style={styles.content}>
+        {/* Cards Section */}
+        <View style={styles.cardGrid}>
+          <Card title="Tagesplan" image={require('@/assets/images/test2.png')}>
+            <ThemedText>Deep Work, Meetings, Sketching…</ThemedText>
+          </Card>
+          <Card title="Budget" image={require('@/assets/images/test3.png')}>
+            <ThemedText>€ 12,70 / 25,00</ThemedText>
+          </Card>
+          <Card title="Checklist" image={require('@/assets/images/test4.png')}>
+            <ThemedText>Yoga 🌿</ThemedText>
+            <ThemedText>Read 📖</ThemedText>
+          </Card>
+          <Card title="Vibes" image={require('@/assets/images/test5.png')}>
+            <ThemedText>Lofi, Matcha, Tea time</ThemedText>
+          </Card>
+        </View>
+
+        {/* Big Illustration */}
         <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
+          source={require('@/assets/images/test4.png')}
+          style={styles.heroImage}
+          resizeMode="cover"
         />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+function Card({ title, children, image }) {
+  return (
+    <ThemedView style={styles.card}>
+      <Image source={image} style={styles.cardImg} />
+      <ThemedText type="subtitle" style={styles.cardTitle}>
+        {title}
+      </ThemedText>
+      {children}
+    </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+  header: {
+    padding: 20,
+    justifyContent: 'flex-end',
+    height: 180,
   },
-  stepContainer: {
+  title: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#89b27f',
+    marginTop: 6,
+  },
+  content: {
+    flex: 1,
+    padding: 16,
+    gap: 16,
+  },
+  cardGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  card: {
+    flexBasis: '47%',
+    backgroundColor: '#1b1f1c',
+    borderRadius: 16,
+    padding: 12,
     gap: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+  },
+  cardTitle: {
+    color: '#89b27f',
+  },
+  cardImg: {
+    height: 80,
+    borderRadius: 12,
     marginBottom: 8,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  heroImage: {
+    flex: 1,
+    borderRadius: 16,
   },
 });
