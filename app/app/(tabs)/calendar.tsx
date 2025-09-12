@@ -114,7 +114,13 @@ const BG = '#0d0d0d';
 const CARD = '#1b1f1c';
 const LEAF_COLORS = ['#7aa874', '#9ec49e', '#c4e3c0', '#89b27f'];
 const SYMBOLS = ['🍵', '📚', '🏃‍♂️', '💻', '🎨', '🧠', '📅', '🛒', '☕️', '🗒️'];
-const DEFAULT_REGION = { latitude: 52.52, longitude: 13.405, latitudeDelta: 0.05, longitudeDelta: 0.05 };
+const DEFAULT_REGION = {
+  latitude: 53.0793,   // Bremen
+  longitude: 8.8017,
+  latitudeDelta: 0.05,
+  longitudeDelta: 0.05,
+};
+
 
 /* --------------------------------------- Helpers -------------------------------------------- */
 function todayISO() { const d = new Date(); return d.toISOString().slice(0, 10); }

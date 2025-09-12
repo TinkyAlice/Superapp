@@ -46,14 +46,14 @@ export default function MapPicker({
   const iframeSrc = useMemo(() => {
     if (addr.trim()) return `https://www.google.com/maps?q=${encodeURIComponent(addr)}&output=embed`;
     if (coord) return `https://www.google.com/maps?q=${coord.latitude},${coord.longitude}&output=embed`;
-    return `https://www.google.com/maps?q=${encodeURIComponent('Berlin, Germany')}&output=embed`;
+return `https://www.google.com/maps?q=${encodeURIComponent('Bremen, Germany')}&output=embed`;
   }, [addr, coord]);
 
   return (
     <View style={{ gap: 8 }}>
       <View style={{ flexDirection: 'row', gap: 8 }}>
         <TextInput
-          placeholder="Adresse eingeben (z. B. Rosenthaler Str. 1, Berlin)"
+          placeholder="Adresse eingeben (z. B. Vegesacker Str. 87, Bremen)"
           placeholderTextColor="#9aa39a"
           value={addr}
           onChangeText={(v) => { setAddr(v); onQueryChange?.(v); }}
