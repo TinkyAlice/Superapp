@@ -1,7 +1,9 @@
-// calendar.tsx
-import React, { useMemo, useState } from 'react';
+// Calendar.tsx — Responsive, auto-adapting layout
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  Animated,
+  Easing,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -12,8 +14,8 @@ import {
   SectionList,
   StyleSheet,
   TextInput,
-  TouchableOpacity,
   useWindowDimensions,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { Calendar, DateObject } from 'react-native-calendars';
@@ -23,179 +25,45 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 
 /* =============================================================================
-   TimeField – Uhrzeit-Auswahl (Web: <input type="time">, Native: DateTimePicker)
+   AsyncStorage: robust Fallback (verhindert Crash wenn Paket fehlt)
 ============================================================================= */
-function formatHHMM(d: Date) {
-  const h = String(d.getHours()).padStart(2, '0');
-  const m = String(d.getMinutes()).padStart(2, '0');
-  return `${h}:${m}`;
-}
-function parseHHMM(base: Date, hhmm: string) {
-  const [h, m] = hhmm.split(':').map(Number);
-  const d = new Date(base);
-  d.setHours(h || 0, m || 0, 0, 0);
-  return d;
-}
-function TimeField({
-  label,
-  date,
-  setDate,
-}: {
-  label: string;
-  date: Date;
-  setDate: (d: Date) => void;
-}) {
-  const [show, setShow] = useState(false);
-
-  if (Platform.OS === 'web') {
-    // @ts-ignore – raw HTML auf Web ist ok
-    return (
-      <View style={{ flex: 1 }}>
-        <ThemedText style={{ color: '#c8d6c3', marginBottom: 4 }}>{label}</ThemedText>
-        <input
-          type="time"
-          value={formatHHMM(date)}
-          onChange={(e: any) => setDate(parseHHMM(date, e.target.value))}
-          style={{
-            width: '100%',
-            background: '#1f2421',
-            color: '#e9efe6',
-            borderRadius: 12,
-            padding: 10,
-            border: 'none',
-            outline: 'none',
-          }}
-        />
-      </View>
-    );
-  }
-
-  return (
-    <View style={{ flex: 1 }}>
-      <ThemedText style={{ color: '#c8d6c3', marginBottom: 4 }}>
-        {label}: {formatHHMM(date)}
-      </ThemedText>
-      <Pressable onPress={() => setShow(true)} style={styles.timeButton}>
-        <ThemedText style={{ color: '#e9efe6' }}>Uhrzeit wählen</ThemedText>
-      </Pressable>
-      {show && (
-        <DateTimePicker
-          value={date}
-          mode="time"
-          is24Hour
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(_e: DateTimePickerEvent, d?: Date) => {
-            setShow(Platform.OS === 'ios'); // iOS offen lassen, Android schließt
-            if (d) setDate(d);
-          }}
-        />
-      )}
-    </View>
-  );
+let AsyncStorage: any;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  AsyncStorage = require('@react-native-async-storage/async-storage').default;
+} catch {
+  const mem: Record<string, string> = {};
+  AsyncStorage = {
+    async getItem(k: string) {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') return window.localStorage.getItem(k);
+      return mem[k] ?? null;
+    },
+    async setItem(k: string, v: string) {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') window.localStorage.setItem(k, v);
+      else mem[k] = v;
+    },
+    async removeItem(k: string) {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') window.localStorage.removeItem(k);
+      else delete mem[k];
+    },
+  };
+  console.warn('[Calendar] AsyncStorage native nicht gefunden – Fallback aktiv. Installiere @react-native-async-storage/async-storage für echte Persistenz.');
 }
 
 /* =============================================================================
-   TimelineDay – linke Tages-Timeline
+   Farben & Basics
 ============================================================================= */
-type TimelineProps = {
-  events: Event[];                 // sortiert nach Start
-  nowISO?: string;                 // z.B. todayISO()
-  onPressItem?: (ev: Event) => void;
-  onAdd?: () => void;              // für das + Node
-};
-
-function isNowBetween(ev: Event, ref: Date) {
-  const s = new Date(`${ev.date}T${ev.start}:00`);
-  const e = new Date(`${ev.date}T${ev.end}:00`);
-  return ref >= s && ref <= e;
-}
-
-function TimelineDay({ events, nowISO, onPressItem, onAdd }: TimelineProps) {
-  const now = nowISO ? new Date(nowISO + 'T' + new Date().toTimeString().slice(0, 8)) : new Date();
-
-  return (
-    <View style={tl.timelineWrap}>
-      {/* linke Zeitspalte */}
-      <View style={tl.timeCol}>
-        {events.map((ev, i) => (
-          <ThemedText key={ev.id} style={[tl.timeText, i === 0 && { marginTop: 6 }]}>
-            {ev.start}
-          </ThemedText>
-        ))}
-        {!!events[events.length - 1] && (
-          <ThemedText style={[tl.timeText, { marginTop: 12 }]}>
-            {events[events.length - 1].end}
-          </ThemedText>
-        )}
-      </View>
-
-      {/* rechte Timeline-Spalte */}
-      <View style={tl.lineCol}>
-        <View style={tl.line} />
-        {events.map((ev) => {
-          const active = isNowBetween(ev, now);
-          return (
-            <Pressable key={ev.id} onPress={() => onPressItem?.(ev)} style={{ width: '100%' }}>
-              <View style={tl.row}>
-                <View style={[tl.node, { backgroundColor: ev.color || '#555' }, active && tl.nodeActive]}>
-                  <ThemedText style={tl.nodeIcon}>{ev.symbol || '•'}</ThemedText>
-                </View>
-                <View style={[tl.card, active && tl.cardActive]}>
-                  <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }}>
-                    <ThemedText type="defaultSemiBold" style={{ color: '#fff' }}>
-                      {ev.title}
-                    </ThemedText>
-                    <ThemedText style={{ color: '#c8d6c3', fontSize: 12 }}>
-                      {ev.start}–{ev.end}
-                    </ThemedText>
-                  </View>
-                  {!!ev.locationName && (
-                    <ThemedText style={{ color: '#c8d6c3', marginTop: 2, fontSize: 12 }}>
-                      {ev.locationName}
-                    </ThemedText>
-                  )}
-                </View>
-              </View>
-            </Pressable>
-          );
-        })}
-
-        {/* Plus-Node */}
-        <Pressable onPress={onAdd} style={{ width: '100%' }}>
-          <View style={tl.row}>
-            <View style={[tl.node, tl.nodePlus]}>
-              <ThemedText style={tl.nodeIcon}>＋</ThemedText>
-            </View>
-            <View style={[tl.card, { opacity: 0.9 }]}>
-              <ThemedText style={{ color: '#c8d6c3' }}>Was hast du noch zu tun?</ThemedText>
-            </View>
-          </View>
-        </Pressable>
-      </View>
-    </View>
-  );
-}
-
-const tl = StyleSheet.create({
-  timelineWrap: { flexDirection: 'row', gap: 10 },
-  timeCol: { width: 52, alignItems: 'flex-end', paddingTop: 8 },
-  timeText: { color: '#9aa39a', fontSize: 12, marginVertical: 14 },
-  lineCol: { flex: 1, position: 'relative', paddingLeft: 20 },
-  line: { position: 'absolute', left: 10, top: 0, bottom: 0, width: 3, backgroundColor: '#2b312d', borderRadius: 2 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
-  node: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: '#2b312d' },
-  nodeActive: { borderColor: '#f0c5cf' },
-  nodePlus: { backgroundColor: '#303632' },
-  nodeIcon: { color: '#0d0d0d', fontSize: 16 },
-  card: { flex: 1, backgroundColor: '#212622', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 12 },
-  cardActive: { backgroundColor: '#2b2f2c' },
-});
+const MATCHA = '#89b27f';
+const BG = '#0d0d0d';
+const CARD = '#1b1f1c';
 
 /* =============================================================================
-   Types & Consts (inkl. Routine)
+   Types
 ============================================================================= */
-type EventType = 'Termin' | 'Event' | 'Routine';
-type ViewMode = 'DAY' | 'WEEK' | 'MONTH';
+export type EventType = 'Termin' | 'Event' | 'Routine';
+export type ViewMode = 'DAY' | 'WEEK' | 'MONTH';
+
+type LatLng = { latitude: number; longitude: number };
 
 type Event = {
   id: string;
@@ -205,34 +73,21 @@ type Event = {
   end: string;    // 'HH:mm'
   type: EventType;
   locationName?: string;
-  location?: { latitude: number; longitude: number };
+  location?: LatLng;
   note?: string;
   color?: string;
-  symbol?: string; // emoji oder icon-name
+  symbol?: string; // emoji
+  seriesId?: string; // für Routinen-Serien
 };
 
-type Routine = {
-  id: string;
-  title: string;
-  defaultTime: string; // 'HH:mm'
-  weekdays: number[]; // 0..6 (0 = Sonntag) – welche Wochentage aktiv
-  overrides?: Record<string, string>; // ISO date -> 'HH:mm' (ausnahmen)
-  active?: boolean;
-  symbol?: string;
-  color?: string;
-};
-
-const MATCHA = '#89b27f';
-const BG = '#0d0d0d';
-const CARD = '#1b1f1c';
-
-const LEAF_COLORS = ['#7aa874', '#9ec49e', '#c4e3c0', '#89b27f'];
-const SYMBOLS = ['🍵', '📚', '🏃‍♂️', '💻', '🎨', '🧠', '📅', '🛒', '☕️', '🗒️'];
-const DEFAULT_REGION = { latitude: 53.0793, longitude: 8.8017, latitudeDelta: 0.05, longitudeDelta: 0.05 }; // Bremen
+type Conflict = { a: Event; b: Event };
 
 /* =============================================================================
    Helpers
 ============================================================================= */
+const LEAF_COLORS = ['#7aa874', '#9ec49e', '#c4e3c0', '#89b27f'];
+const SYMBOLS = ['🍵', '📚', '🏃‍♂️', '💻', '🎨', '🧠', '📅', '🛒', '☕️', '🗒️'];
+
 function todayISO() { return new Date().toISOString().slice(0, 10); }
 function addDaysISO(days: number, baseISO?: string) {
   const d = baseISO ? new Date(baseISO + 'T00:00:00') : new Date();
@@ -241,7 +96,13 @@ function addDaysISO(days: number, baseISO?: string) {
 }
 function formatHuman(iso: string) {
   const d = new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString(undefined, { weekday: 'long', day: '2-digit', month: 'long' });
+  return d.toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: 'long' });
+}
+function yymm(iso: string) { return iso.slice(0, 7); }
+function isSameMonth(aISO: string, bISO: string) { return yymm(aISO) === yymm(bISO); }
+function humanDayShort(iso: string) {
+  const d = new Date(iso + 'T00:00:00');
+  return d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: 'short' });
 }
 function dateFromISOAndTime(iso: string, time: string) {
   const [h, m] = time.split(':').map(Number);
@@ -249,7 +110,23 @@ function dateFromISOAndTime(iso: string, time: string) {
   d.setHours(h || 0, m || 0, 0, 0);
   return d;
 }
-function hhmmFromDate(date: Date) { return formatHHMM(date); }
+function hhmmFromDate(date: Date) {
+  const h = String(date.getHours()).padStart(2, '0');
+  const m = String(date.getMinutes()).padStart(2, '0');
+  return `${h}:${m}`;
+}
+function hhmmToMin(hhmm: string) {
+  const [h, m] = hhmm.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+function minToHHMM(min: number) {
+  const m = ((min % (24 * 60)) + (24 * 60)) % (24 * 60);
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+function minutesDiff(a: string, b: string) { return Math.max(0, hhmmToMin(b) - hhmmToMin(a)); }
+function clamp(v:number,a:number,b:number){ return Math.max(a, Math.min(b, v)); }
 function startOfWeekISO(iso: string) {
   const d = new Date(iso + 'T00:00:00');
   const day = (d.getDay() + 6) % 7; // 0..6 (Mo=0)
@@ -261,22 +138,167 @@ function range7(iso: string) {
   return Array.from({ length: 7 }, (_, i) => {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
-    return { iso: d.toISOString().slice(0, 10), label: d.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit' }) };
+    return {
+      iso: d.toISOString().slice(0, 10),
+      label: d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit' }),
+    };
   });
 }
-function yymm(iso: string) { return iso.slice(0, 7); }
-function isSameMonth(aISO: string, bISO: string) { return yymm(aISO) === yymm(bISO); }
-function humanDayShort(iso: string) {
-  const d = new Date(iso + 'T00:00:00');
-  return d.toLocaleDateString(undefined, { weekday: 'short', day: '2-digit', month: 'short' });
+function weekdayFromISO(iso:string){
+  const d = new Date(iso+'T00:00:00');
+  const js = d.getDay(); // So=0..Sa=6
+  return js===0 ? 7 : js;
 }
+function addDaysISOFrom(iso:string, n:number){
+  const d = new Date(iso+'T00:00:00');
+  d.setDate(d.getDate()+n);
+  return d.toISOString().slice(0,10);
+}
+function addMinutesHHMM(hhmm:string, mins:number) {
+  const t = hhmmToMin(hhmm) + mins;
+  return minToHHMM((t+24*60)%(24*60));
+}
+function parseHHMM(base: Date, hhmm: string) {
+  const [h, m] = hhmm.split(':').map(Number);
+  const d = new Date(base);
+  d.setHours(h || 0, m || 0, 0, 0);
+  return d;
+}
+
+/* =============================
+   Breakpoints & responsive hook
+============================== */
+function useBreakpoints() {
+  const { width } = useWindowDimensions();
+  const bp = width < 480 ? 'xs' : width < 768 ? 'sm' : width < 1024 ? 'md' : width < 1440 ? 'lg' : 'xl';
+  const scale = width < 360 ? 0.95 : width < 480 ? 0.98 : width < 768 ? 1.0 : 1.0;
+  return {
+    width,
+    bp,
+    isXS: bp==='xs', isSM: bp==='sm', isMD: bp==='md', isLG: bp==='lg', isXL: bp==='xl',
+    fontScale: scale,
+  } as const;
+}
+
+/* Monatsliste */
 function buildMonthSections(allEvents: Event[], monthRefISO: string) {
   const monthEvents = allEvents
     .filter(e => isSameMonth(e.date, monthRefISO))
     .sort((a, b) => (a.date === b.date ? a.start.localeCompare(b.start) : a.date.localeCompare(b.date)));
+
   const byDate: Record<string, Event[]> = {};
   for (const ev of monthEvents) (byDate[ev.date] ??= []).push(ev);
+
   return Object.keys(byDate).sort().map(dayISO => ({ title: dayISO, data: byDate[dayISO] }));
+}
+
+/* =============================================================================
+   TimeField – Uhrzeit-Auswahl
+============================================================================= */
+function TimeField({ label, date, setDate }:{ label: string; date: Date; setDate: (d: Date) => void; }) {
+  const [show, setShow] = useState(false);
+
+  if (Platform.OS === 'web') {
+    // @ts-ignore – raw HTML auf Web ist ok
+    return (
+      <View style={{ flex: 1 }}>
+        <ThemedText style={{ color: '#c8d6c3', marginBottom: 4 }}>{label}</ThemedText>
+        <input
+          type="time"
+          value={hhmmFromDate(date)}
+          onChange={(e: any) => setDate(parseHHMM(date, e.target.value))}
+          style={{ width: '100%', background: '#1f2421', color: '#e9efe6', borderRadius: 12, padding: 10, border: 'none', outline: 'none' }}
+        />
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <ThemedText style={{ color: '#c8d6c3', marginBottom: 4 }}>{label}: {hhmmFromDate(date)}</ThemedText>
+      <Pressable onPress={() => setShow(true)} style={styles.timeButton} accessibilityRole="button" accessibilityLabel={`${label} auswählen`}>
+        <ThemedText style={{ color: '#e9efe6' }}>Uhrzeit wählen</ThemedText>
+      </Pressable>
+      {show && (
+        <DateTimePicker
+          value={date}
+          mode="time"
+          is24Hour
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_e: DateTimePickerEvent, d?: Date) => { setShow(Platform.OS === 'ios'); if (d) setDate(d); }}
+        />
+      )}
+    </View>
+  );
+}
+
+/* =============================================================================
+   Routine-Materialisierung
+============================================================================= */
+function materializeWeeklyRoutine(
+  base: Omit<Event,'id'|'date'> & { date:string },
+  weekdays:number[], startFromISO:string,
+  untilISO?:string, excludeISO:Set<string> = new Set(), countLimit = 120, seriesId?: string,
+): Event[] {
+  const out:Event[]=[]; let cursor = startFromISO;
+  for (let i=0; i<countLimit; i++){
+    const wd = weekdayFromISO(cursor);
+    if (weekdays.includes(wd) && !excludeISO.has(cursor)) {
+      out.push({ ...base, id: `${seriesId||'series'}-${cursor}-${i}-${Math.random().toString(36).slice(2,6)}`, date: cursor, seriesId });
+    }
+    if (untilISO && cursor>untilISO) break;
+    cursor = addDaysISOFrom(cursor, 1);
+  }
+  return out;
+}
+
+/* =============================================================================
+   Overnight-Splitting + Kollisionen
+============================================================================= */
+function splitIfOvernight(ev: Event): Event[] {
+  const s = hhmmToMin(ev.start), e = hhmmToMin(ev.end);
+  if (e >= s) return [ev];
+  const first: Event = { ...ev, end: '24:00' };
+  const second: Event = { ...ev, id: ev.id + ':spill', date: addDaysISOFrom(ev.date, 1), start: '00:00', end: ev.end };
+  return [first, second];
+}
+function dayConflicts(dayEvents: Event[]): Conflict[] {
+  const list = [...dayEvents].sort((a,b)=>a.start.localeCompare(b.start));
+  const out: Conflict[] = [];
+  for (let i=0;i<list.length;i++){
+    const a = list[i]; const aS = hhmmToMin(a.start), aE = hhmmToMin(a.end);
+    for (let j=i+1;j<list.length;j++){
+      const b = list[j]; const bS = hhmmToMin(b.start), bE = hhmmToMin(b.end);
+      if (bS >= aE) break; // da sortiert
+      if (Math.max(aS, bS) < Math.min(aE, bE)) out.push({ a, b });
+    }
+  }
+  return out;
+}
+function layoutColumns(items: Event[]) {
+  type LItem = Event & { _s:number; _e:number; col:number; cols:number; };
+  const evs = items.map(ev => ({...ev, _s: hhmmToMin(ev.start), _e: hhmmToMin(ev.end)}))
+                   .sort((a,b)=> a._s - b._s || a._e - b._e);
+  const result: LItem[] = [];
+  let cluster: LItem[] = []; let clusterEnd = -1;
+  const flushCluster = () => {
+    if (cluster.length===0) return;
+    const lanes: number[] = [];
+    for (const ev of cluster) {
+      let lane = lanes.findIndex(end => end <= ev._s);
+      if (lane === -1) { lane = lanes.length; lanes.push(ev._e); } else { lanes[lane] = ev._e; }
+      result.push({ ...ev, col: lane, cols: 0 });
+    }
+    const cols = lanes.length; for (const r of result.slice(-cluster.length)) r.cols = cols;
+    cluster = []; clusterEnd = -1;
+  };
+  for (const ev of evs) {
+    if (cluster.length===0) { cluster.push(ev); clusterEnd = ev._e; }
+    else if (ev._s < clusterEnd) { cluster.push(ev); clusterEnd = Math.max(clusterEnd, ev._e); }
+    else { flushCluster(); cluster.push(ev); clusterEnd = ev._e; }
+  }
+  flushCluster();
+  return result;
 }
 
 /* =============================================================================
@@ -286,30 +308,165 @@ const seedEvents: Event[] = [
   { id: '1', title: 'Deep Work', date: todayISO(), start: '09:00', end: '11:00', type: 'Termin', color: '#7aa874', symbol: '💻' },
   { id: '2', title: 'Matcha mit Mia', date: todayISO(), start: '13:00', end: '14:00', type: 'Event', color: '#9ec49e', symbol: '🍵', locationName: 'Matcha Café' },
   { id: '3', title: 'Lofi & Sketch', date: todayISO(), start: '16:00', end: '17:00', type: 'Event', color: '#c4e3c0', symbol: '🎨' },
-  { id: '4', title: 'Gym', date: addDaysISO(1), start: '07:30', end: '08:15', type: 'Termin', color: '#7aa874', symbol: '🏃‍♂️' },
+  { id: '4', title: 'Night Shift', date: todayISO(), start: '22:30', end: '01:00', type: 'Termin', color: '#7aa874', symbol: '🌙' },
 ];
 
-const seedRoutines: Routine[] = [
-  { id: 'r1', title: 'Zähne putzen', defaultTime: '21:20', weekdays: [1,2,3,4,5,6], active:true, symbol:'🪥', color:'#f0c5cf' }, // Mo-Sa
-  { id: 'r2', title: 'Morgenstretch', defaultTime: '07:10', weekdays: [1,2,3,4,5], active:true, symbol:'🧘', color:'#c4e3c0' },
-];
+/* =============================================================================
+   Timeline Day (00:00–24:00) — responsive
+============================================================================= */
+function TimelineDay({
+  items, dateISO, doneSet, onToggleDone, onPressItem, onAdd, autoScrollRef,
+}:{ items: Event[]; dateISO: string; doneSet: Set<string>; onToggleDone: (key:string)=>void; onPressItem?: (ev:Event)=>void; onAdd?: ()=>void; autoScrollRef?: React.RefObject<ScrollView>; }) {
+  const { bp } = useBreakpoints();
+  const PPM = bp==='xs' ? 1.0 : bp==='sm' ? 1.1 : 1.25; // etwas kompakter auf sehr kleinen Screens
+  const startMin = 0; const endMin = 24 * 60; const trackH = (endMin - startMin) * PPM;
+  const hours:number[]=[]; for(let t=startMin; t<=endMin; t+=60) hours.push(t);
+
+  const isToday = dateISO === todayISO();
+  const calcNowMin = () => { const n = new Date(); return n.getHours()*60 + n.getMinutes() + n.getSeconds()/60; };
+  const nowAnim = useRef(new Animated.Value(0)).current;
+  const [nowMinSnap, setNowMinSnap] = useState<number>(calcNowMin());
+
+  const [trackWidth, setTrackWidth] = useState<number>(0);
+  const leftRail = 34; const gutter = 8;
+
+  useEffect(()=>{
+    if (!isToday){ nowAnim.setValue(0); return; }
+    const nowMin = clamp(calcNowMin(), startMin, endMin);
+    nowAnim.setValue((nowMin - startMin) * PPM); setNowMinSnap(nowMin);
+  },[isToday, PPM]);
+
+  useEffect(()=>{
+    if (!isToday) return;
+    const id = setInterval(()=>{
+      const nowMin = clamp(calcNowMin(), startMin, endMin);
+      setNowMinSnap(nowMin);
+      Animated.timing(nowAnim, { toValue: (nowMin - startMin) * PPM, duration: 900, easing: Easing.inOut(Easing.quad), useNativeDriver: false }).start();
+    }, 1200);
+    return ()=>clearInterval(id);
+  },[isToday, PPM]);
+
+  const containerTop = useRef(0);
+  useEffect(()=>{
+    if (!isToday || !autoScrollRef?.current) return;
+    const y = containerTop.current + (nowMinSnap - 60) * PPM - 180; if (y>0) autoScrollRef.current.scrollTo({ y, animated: true });
+  },[isToday, nowMinSnap, autoScrollRef, PPM]);
+
+  // Freizeitflächen
+  const sorted = [...items].sort((a,b)=>a.start.localeCompare(b.start));
+  const gaps:{top:number;height:number;label:string}[] = []; let cursor = startMin;
+  for (const it of sorted) { const s = hhmmToMin(it.start), e = hhmmToMin(it.end);
+    if (s>cursor) gaps.push({ top:(cursor-startMin)*PPM, height:(s-cursor)*PPM, label:`Freizeit ${minToHHMM(cursor)}–${minToHHMM(s)}` });
+    cursor = Math.max(cursor, e);
+  }
+  if (cursor<endMin) gaps.push({ top:(cursor-startMin)*PPM, height:(endMin-cursor)*PPM, label:`Freizeit ${minToHHMM(cursor)}–24:00` });
+
+  const between = (min:number,val:number,max:number)=> val>=min && val<max; const nowAbs = isToday ? nowMinSnap : undefined;
+  const laid = useMemo(()=>layoutColumns(items), [items]);
+
+  return (
+    <View style={{ flexDirection:'row', gap:10 }} onLayout={(e)=>{ containerTop.current = e.nativeEvent.layout.y; }}>
+      {/* Zeiten-Spalte */}
+      <View style={{ width: bp==='xs' ? 64 : 88, paddingTop:2 }} pointerEvents="none">
+        {hours.map(t=> (
+          <ThemedText key={t} style={{ color:'#9aa39a', fontSize: bp==='xs'?10:12, position:'absolute', right:8, top:(t-startMin)*PPM - 7 }}>
+            {minToHHMM(t)}
+          </ThemedText>
+        ))}
+        <View style={{ height: trackH }} />
+      </View>
+
+      {/* Track */}
+      <View style={{ flex:1, position:'relative' }} onLayout={(e)=>setTrackWidth(e.nativeEvent.layout.width)}>
+        <View pointerEvents="none" style={{ position:'absolute', left:10, top:0, bottom:0, width:3, backgroundColor:'#2b312d', borderRadius:2 }} />
+        {hours.map(t=> (<View key={t} pointerEvents="none" style={{ position:'absolute', left:0, right:0, height:1, backgroundColor:'#27302b', top:(t-startMin)*PPM }} />))}
+
+        {/* Freizeitflächen */}
+        {gaps.map((g,idx)=>(
+          <View key={idx} pointerEvents="none" style={{ position:'absolute', left:0, right:0, top:g.top, height:g.height, backgroundColor:'#141815' }}>
+            <ThemedText style={{ color:'#56605a', fontSize:11, position:'absolute', left:12, top:6 }}>{g.label}</ThemedText>
+          </View>
+        ))}
+
+        {/* River */}
+        {isToday && (<>
+          <Animated.View pointerEvents="none" style={{ position:'absolute', left:10, width:3, top:0, height: nowAnim, backgroundColor: MATCHA, borderRadius:2, opacity:0.85 }} />
+          <Animated.View pointerEvents="none" style={{ position:'absolute', left:5, top: Animated.add(nowAnim, new Animated.Value(-6)), width:14, height:14, borderRadius:7, backgroundColor:'#f7d9e3' }} />
+        </>)}
+
+        {/* ITEMS mit Spalten-Layout */}
+        {laid.map(ev=>{
+          const top = (hhmmToMin(ev.start)-startMin)*PPM;
+          const height = Math.max(40, Math.max(1, minutesDiff(ev.start, ev.end))*PPM);
+          const s = hhmmToMin(ev.start), e = hhmmToMin(ev.end);
+          const status: 'past'|'current'|'future' = !isToday ? 'future' : (nowAbs! >= e) ? 'past' : between(s, nowAbs!, e) ? 'current' : 'future';
+          const key = `${ev.type}:${ev.id}`; const done = doneSet.has(key);
+          const cardBg = status==='current' ? '#283229' : status==='past' ? '#202522' : '#212622';
+          const iconBg = status==='current' ? (ev.color||MATCHA) : status==='past' ? '#3a3f3b' : (ev.color||'#5a5a5a');
+          const progress = (status==='current' && isToday) ? clamp(((nowAbs! - s) / Math.max(1, (e - s))), 0, 1) : 0;
+
+          const usable = Math.max(0, trackWidth - (leftRail + 8));
+          const gutter = 8; const colWidth = ev.cols>0 ? (usable - gutter*(ev.cols-1)) / ev.cols : usable;
+          const left = leftRail + 8 + ev.col * (colWidth + gutter);
+
+          return (
+            <View key={ev.id} style={{ position:'absolute', left, width: colWidth, top, height }}>
+              <View style={{ flexDirection:'row', height:'100%' }}>
+                <View style={{ position:'absolute', left:-leftRail, width:34, height:34, borderRadius:17, backgroundColor: iconBg, borderWidth:3, borderColor:'#2b312d', alignItems:'center', justifyContent:'center', marginTop:-6 }}>
+                  <ThemedText style={{ color:'#0d0d0d' }}>{ev.symbol || '•'}</ThemedText>
+                </View>
+
+                <Pressable onPress={()=>onPressItem?.(ev)} style={{ flex:1 }}>
+                  <View style={{ height:'100%', borderRadius:12, backgroundColor: cardBg, borderLeftWidth:4, borderLeftColor: ev.color||MATCHA, padding:10, justifyContent:'space-between', opacity: done ? 0.55 : (status==='past'?0.85:1) }}>
+                    <View style={{ flexDirection:'row', justifyContent:'space-between', gap:8, alignItems:'flex-start' }}>
+                      <View style={{ flexShrink:1 }}>
+                        <ThemedText type="defaultSemiBold" numberOfLines={2} style={[ { color:'#fff' }, done && { textDecorationLine:'line-through' }, status==='current' && { textShadowColor: ev.color||MATCHA, textShadowRadius:8, textShadowOffset:{width:0, height:1} }, ] as any}>
+                          {ev.title}
+                        </ThemedText>
+                        {ev.type==='Routine' && ev.seriesId && (
+                          <ThemedText style={{ color:'#c8d6c3', fontSize:11, opacity:0.9, marginTop:2 }}>Wöchentlich</ThemedText>
+                        )}
+                      </View>
+                      <ThemedText style={{ color:'#c8d6c3', fontSize:11, minWidth:64, textAlign:'right' }}>{ev.start}–{ev.end}</ThemedText>
+                    </View>
+                    {!!ev.locationName && (<ThemedText numberOfLines={1} style={{ color:'#c8d6c3', fontSize:12 }}>{ev.locationName}</ThemedText>)}
+                    {status==='current' && (
+                      <View style={{ marginTop:6, height:6, backgroundColor:'#1b221e', borderRadius:3, overflow:'hidden' }}>
+                        <Animated.View style={{ height:'100%', width:`${Math.round(progress*100)}%`, backgroundColor: ev.color||MATCHA }} />
+                      </View>
+                    )}
+                  </View>
+                </Pressable>
+
+                <Pressable onPress={()=>onToggleDone(key)} style={{ alignSelf:'center', marginLeft:8 }} accessibilityRole="button" accessibilityLabel={`${done ? 'Erledigt' : 'Offen'} umschalten`}>
+                  <View style={{ width:26, height:26, borderRadius:13, borderWidth:2, borderColor: done? MATCHA : '#59615d', alignItems:'center', justifyContent:'center', backgroundColor: done? 'rgba(137,178,127,.15)' : 'transparent' }}>
+                    <ThemedText style={{ color: done? MATCHA : '#c8d6c3', fontSize:12 }}>{done ? '✓' : ''}</ThemedText>
+                  </View>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })}
+
+        <Pressable onPress={onAdd} style={{ marginTop: trackH + 10, paddingLeft:6 }}>
+          <ThemedText style={{ color: MATCHA }}>+ hinzufügen</ThemedText>
+        </Pressable>
+        <View style={{ height: 8 }} />
+      </View>
+    </View>
+  );
+}
 
 /* =============================================================================
    Screen
 ============================================================================= */
 export default function CalendarScreen() {
   const [date, setDate] = useState(todayISO());
-  const [view, setView] = useState<ViewMode>('DAY');
-
   const [events, setEvents] = useState<Event[]>(seedEvents);
-  const [routines, setRoutines] = useState<Routine[]>(seedRoutines);
-
-  // routineDone: map ISO -> Set of routineIds done on that date
-  const [routineDone, setRoutineDone] = useState<Record<string, string[]>>({});
-
   const [selectedEvent, setSelectedEvent] = useState<Event | null>(null);
+  const [doneSet, setDoneSet] = useState<Set<string>>(new Set());
 
-  // Editor (events)
+  // Editor
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
@@ -321,431 +478,231 @@ export default function CalendarScreen() {
   const [endDate, setEndDate] = useState<Date>(dateFromISOAndTime(date, '10:00'));
   const [note, setNote] = useState('');
   const [locationName, setLocationName] = useState('');
-  const [location, setLocation] = useState<{ latitude: number; longitude: number } | undefined>(undefined);
+  const [location, setLocation] = useState<LatLng | undefined>(undefined);
+
+  // Routine
+  const [routineDuration, setRoutineDuration] = useState<number>(30);
+  const [recurEnabled, setRecurEnabled] = useState(false);
+  const [recurWeekdays, setRecurWeekdays] = useState<number[]>([]);
+  const [recurUntil, setRecurUntil] = useState<string>('');
+  const [recurExceptions, setRecurExceptions] = useState<string>('');
+
   const [leftMode, setLeftMode] = useState<'DAY' | 'MONTH'>('DAY');
+  const pageScrollRef = useRef<ScrollView>(null);
 
-  // Routine editor
-  const [routineEditorOpen, setRoutineEditorOpen] = useState(false);
-  const [editingRoutineId, setEditingRoutineId] = useState<string | null>(null);
-  const [rTitle, setRTitle] = useState('');
-  const [rTime, setRTime] = useState('21:20');
-  const [rWeekdays, setRWeekdays] = useState<number[]>([1,2,3,4,5,6]); // Mo-Sa default
-  const [rOverrides, setROverrides] = useState<Record<string,string>>({});
-  const [rActive, setRActive] = useState(true);
-  const [rSymbol, setRSymbol] = useState('🪥');
-  const [rColor, setRColor] = useState('#f0c5cf');
+  // Responsive decisions
+  const { width, bp } = useBreakpoints();
+  const layout = useMemo(() => {
+    const twoColumn = bp!=='xs' && bp!=='sm';
+    const leftWidth = twoColumn ? Math.min(680, Math.max(480, Math.floor(width * (bp==='md' ? 0.58 : bp==='lg' ? 0.52 : 0.48)))) : '100%';
+    const showSideImages = bp==='lg' || bp==='xl';
+    const weekCardWidth = bp==='xs' ? 140 : bp==='sm' ? 160 : bp==='md' ? 180 : 200;
+    return { twoColumn, leftWidth, showSideImages, weekCardWidth } as const;
+  }, [bp, width]);
 
-  // Confirm
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-
-  const { width } = useWindowDimensions();
-  const isNarrow = width < 900;
+  // Persistenz
+  useEffect(() => { (async () => { const raw = await AsyncStorage.getItem('events.v1'); if (raw) setEvents(JSON.parse(raw)); })(); }, []);
+  useEffect(() => { AsyncStorage.setItem('events.v1', JSON.stringify(events)); }, [events]);
 
   const dayEvents = useMemo(
-    () => events.filter(e => e.date === date).sort((a, b) => a.start.localeCompare(b.start)),
+    () => events.flatMap(splitIfOvernight).filter(e => e.date === date).sort((a, b) => a.start.localeCompare(b.start)),
     [events, date]
   );
+  const dayConflictsList = useMemo(() => dayConflicts(dayEvents), [dayEvents]);
 
-  // Create "events from routines" for the selected date
-  function routinesForDate(iso: string) {
-    const d = new Date(iso + 'T00:00:00');
-    const weekday = d.getDay(); // 0..6 Sun..Sat
-    const list: Event[] = [];
-    for (const r of routines) {
-      if (!r.active) continue;
-      // override?
-      const override = r.overrides?.[iso];
-      const time = override ?? r.defaultTime;
-      // check if scheduled this weekday or override exists for this date
-      const scheduled = (r.weekdays.includes(weekday)) || (!!override);
-      if (!scheduled) continue;
-      list.push({
-        id: `routine:${r.id}:${iso}`,
-        title: r.title,
-        date: iso,
-        start: time,
-        end: time, // routines no duration by default
-        type: 'Routine',
-        color: r.color,
-        symbol: r.symbol || '🔁',
-      });
-    }
-    // sort by start
-    return list.sort((a,b)=>a.start.localeCompare(b.start));
-  }
-
-  // Markierungen für Monatskalender (aus events + routines)
   const marked = useMemo(() => {
-    const dots: Record<string, any> = {};
-    for (const e of events) {
-      if (!dots[e.date]) dots[e.date] = { dots: [] };
-      dots[e.date].dots.push({ color: e.color || MATCHA });
-    }
-    // routines: mark days that have at least one routine
-    const now = new Date();
-    const monthStart = new Date(date + 'T00:00:00');
-    // we'll just iterate next 31 days to mark
-    for (let i= -3; i < 35; i++) {
-      const iso = addDaysISO(i, date);
-      const rlist = routinesForDate(iso);
-      if (rlist.length) {
-        if (!dots[iso]) dots[iso] = { dots: [] };
-        dots[iso].dots.push({ color: '#f0c5cf' });
-      }
-    }
-    dots[date] = { ...(dots[date] ?? {}), selected: true, selectedColor: MATCHA };
-    return dots;
-  }, [events, routines, date]);
+    const map: Record<string, any> = {};
+    for (const e of events) { if (!map[e.date]) map[e.date] = { dots: [], marked: true }; map[e.date].dots.push({ color: e.color || MATCHA }); }
+    map[date] = { ...(map[date] ?? { dots: [], marked: true }), selected: true, selectedColor: MATCHA };
+    return map;
+  }, [events, date]);
 
-  // WEEK: week helpers
-  const weekStart = useMemo(() => startOfWeekISO(date), [date]);
-  const weekDays = useMemo(() => range7(weekStart), [weekStart]);
-
-  /* ---------- Editor helpers ---------- */
-  function openNewEditor(forDate: string) {
-    setDate(forDate);
-    setEditingId(null);
-    setDraftTitle('');
-    setDraftType('Termin');
-    setDraftColor(LEAF_COLORS[0]);
-    setDraftSymbol(SYMBOLS[0]);
-    setDraftDate(forDate);
-    setStartDate(dateFromISOAndTime(forDate, '09:00'));
-    setEndDate(dateFromISOAndTime(forDate, '10:00'));
-    setNote('');
-    setLocationName('');
-    setLocation(undefined);
+  function openNewEditor(forDate: string, preType: EventType = 'Termin') {
+    setDate(forDate); setEditingId(null); setDraftTitle(''); setDraftType(preType); setDraftColor(LEAF_COLORS[0]); setDraftSymbol(SYMBOLS[0]);
+    setDraftDate(forDate); setStartDate(dateFromISOAndTime(forDate, '09:00')); setEndDate(dateFromISOAndTime(forDate, '10:00'));
+    setRoutineDuration(30); setRecurEnabled(false); setRecurWeekdays([]); setRecurUntil(''); setRecurExceptions(''); setNote(''); setLocationName(''); setLocation(undefined);
     setEditorOpen(true);
   }
-
   function openEditEditor(ev: Event) {
-    setEditingId(ev.id.startsWith('routine:') ? null : ev.id);
-    setDraftTitle(ev.title);
-    setDraftType(ev.type);
-    setDraftColor(ev.color || LEAF_COLORS[0]);
-    setDraftSymbol(ev.symbol || SYMBOLS[0]);
-    setDraftDate(ev.date);
-    setStartDate(dateFromISOAndTime(ev.date, ev.start));
-    setEndDate(dateFromISOAndTime(ev.date, ev.end));
-    setNote(ev.note || '');
-    setLocationName(ev.locationName || '');
-    setLocation(ev.location);
+    setEditingId(ev.id); setDraftTitle(ev.title); setDraftType(ev.type); setDraftColor(ev.color || LEAF_COLORS[0]); setDraftSymbol(ev.symbol || SYMBOLS[0]);
+    setDraftDate(ev.date); setStartDate(dateFromISOAndTime(ev.date, ev.start)); setEndDate(dateFromISOAndTime(ev.date, ev.end));
+    setNote(ev.note || ''); setLocationName(ev.locationName || ''); setLocation(ev.location); setRoutineDuration(minutesDiff(ev.start, ev.end) || 30); setRecurEnabled(!!ev.seriesId);
     setEditorOpen(true);
   }
+  const onPressItem = useCallback((ev: Event) => setSelectedEvent(ev), []);
+  const onAdd = useCallback(() => openNewEditor(date), [date]);
+  function onToggleDone(key:string){ setDoneSet(prev => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; }); }
 
-  function save() {
-    const t = draftTitle.trim();
-    if (!t) { Alert.alert('Titel fehlt', 'Bitte gib einen Titel ein.'); return; }
-    if (endDate < startDate) { Alert.alert('Zeit prüfen', 'Ende liegt vor Start.'); return; }
-    if (Platform.OS === 'web' && locationName.trim() && !location) {
-      Alert.alert('Adresse bestätigen', 'Bitte „Suchen“ im Karten-Widget drücken, um die Adresse zu bestätigen.');
-      return;
-    }
-
-    const newEvent: Event = {
-      id: editingId ?? String(Date.now()),
-      title: t,
-      date: draftDate,
-      start: hhmmFromDate(startDate),
-      end: hhmmFromDate(endDate),
-      type: draftType,
-      locationName: locationName.trim() || undefined,
-      location,
-      note: note.trim() || undefined,
-      color: draftColor,
-      symbol: draftSymbol,
-    };
-
-    setEvents(prev => (editingId ? prev.map(e => e.id === editingId ? newEvent : e) : [...prev, newEvent]));
-    setEditorOpen(false);
-    setSelectedEvent(null);
-  }
-
-  /* ---------- Routine helpers ---------- */
-  function openNewRoutineEditor(forRoutine?: Routine) {
-    if (forRoutine) {
-      setEditingRoutineId(forRoutine.id);
-      setRTitle(forRoutine.title);
-      setRTime(forRoutine.defaultTime);
-      setRWeekdays(forRoutine.weekdays.slice());
-      setROverrides(forRoutine.overrides ? { ...forRoutine.overrides } : {});
-      setRActive(forRoutine.active ?? true);
-      setRSymbol(forRoutine.symbol || '🪥');
-      setRColor(forRoutine.color || '#f0c5cf');
-    } else {
-      setEditingRoutineId(null);
-      setRTitle('Neue Routine');
-      setRTime('21:20');
-      setRWeekdays([1,2,3,4,5,6]);
-      setROverrides({});
-      setRActive(true);
-      setRSymbol('🪥');
-      setRColor('#f0c5cf');
-    }
-    setRoutineEditorOpen(true);
-  }
-
-  function toggleWeekday(w: number) {
-    setRWeekdays(prev => prev.includes(w) ? prev.filter(x => x !== w) : [...prev, w].sort());
-  }
-
-  function saveRoutine() {
-    const t = rTitle.trim();
-    if (!t) { Alert.alert('Titel fehlt', 'Bitte gib einen Titel ein.'); return; }
-    const r: Routine = {
-      id: editingRoutineId ?? String(Date.now()),
-      title: t,
-      defaultTime: rTime,
-      weekdays: rWeekdays,
-      overrides: Object.keys(rOverrides).length ? { ...rOverrides } : undefined,
-      active: rActive,
-      symbol: rSymbol,
-      color: rColor,
-    };
-    setRoutines(prev => editingRoutineId ? prev.map(x => x.id === editingRoutineId ? r : x) : [...prev, r]);
-    setRoutineEditorOpen(false);
-  }
-
-  function removeRoutine(id: string) {
-    Alert.alert('Routine löschen?', 'Wirklich löschen?', [
-      { text: 'Abbrechen', style: 'cancel' },
-      { text: 'Löschen', style: 'destructive', onPress: () => setRoutines(prev => prev.filter(r => r.id !== id)) },
-    ]);
-  }
-
-  // Toggle routine done for a given date ISO
-  function toggleRoutineDoneForDate(routineId: string, iso: string) {
-    setRoutineDone(prev => {
-      const arr = prev[iso] ? [...prev[iso]] : [];
-      if (arr.includes(routineId)) {
-        return { ...prev, [iso]: arr.filter(x => x !== routineId) };
-      } else {
-        return { ...prev, [iso]: [...arr, routineId] };
-      }
+  function confirmConflicts(candidate: Event[], original: Event[]): Promise<boolean> {
+    const expanded = candidate.flatMap(splitIfOvernight);
+    const byDate: Record<string, Event[]> = {}; for (const ev of expanded) (byDate[ev.date] ??= []).push(ev);
+    const conflicts: Conflict[] = []; for (const d of Object.keys(byDate)) conflicts.push(...dayConflicts(byDate[d]));
+    const originalIds = new Set(original.map(e=>e.id)); const newConflicts = conflicts.filter(({a,b}) => !originalIds.has(a.id) || !originalIds.has(b.id));
+    if (newConflicts.length === 0) return Promise.resolve(true);
+    const sample = newConflicts.slice(0, 4).map(c => `• ${c.a.title} (${c.a.date} ${c.a.start}–${c.a.end}) ↔ ${c.b.title} (${c.b.date} ${c.b.start}–${c.b.end})`).join('\n');
+    return new Promise(resolve => {
+      Alert.alert('Kollisionen erkannt', `${newConflicts.length} Überschneidung(en):\n\n${sample}${newConflicts.length>4 ? '\n…' : ''}\n\nTrotzdem speichern?`, [
+        { text: 'Abbrechen', style: 'cancel', onPress: ()=>resolve(false) },
+        { text: 'Trotzdem speichern', style: 'destructive', onPress: ()=>resolve(true) },
+      ]);
     });
   }
 
-  function isRoutineDone(routineId: string, iso: string) {
-    return (routineDone[iso] ?? []).includes(routineId);
+  async function save() {
+    const t = draftTitle.trim(); if (!t) { Alert.alert('Titel fehlt', 'Bitte gib einen Titel ein.'); return; }
+    if (Platform.OS === 'web' && locationName.trim() && !location) { Alert.alert('Adresse bestätigen', 'Bitte „Suchen“ im Karten-Widget drücken, um die Adresse zu bestätigen.'); return; }
+    const startHHMM = hhmmFromDate(startDate);
+    const computedEnd = draftType==='Routine' ? addMinutesHHMM(startHHMM, Math.max(1, routineDuration)) : hhmmFromDate(endDate);
+    const seedSeriesId = (editingId && events.find(e=>e.id===editingId)?.seriesId) || (draftType==='Routine' ? `series_${Date.now().toString(36)}` : undefined);
+
+    const baseEvent: Event = {
+      id: editingId ?? String(Date.now()), title: t, date: draftDate, start: startHHMM, end: computedEnd, type: draftType,
+      locationName: locationName.trim() || undefined, location, note: note.trim() || undefined, color: draftColor, symbol: draftSymbol, seriesId: draftType==='Routine' ? seedSeriesId : undefined,
+    };
+
+    const prev = events; let nextList: Event[];
+    if (editingId) {
+      let base = prev.map(e => e.id === editingId ? baseEvent : e);
+      if (draftType==='Routine' && recurEnabled) {
+        const exc = new Set((recurExceptions||'').split(',').map(s=>s.trim()).filter(Boolean)); const until = recurUntil.trim() || undefined;
+        const weekdays = recurWeekdays.length?recurWeekdays:[weekdayFromISO(draftDate)];
+        const clones = materializeWeeklyRoutine({ ...baseEvent }, weekdays, draftDate, until, exc, 120, seedSeriesId);
+        base = base.filter(e => e.seriesId !== seedSeriesId); nextList = [...base, ...clones];
+      } else { nextList = base; }
+    } else {
+      if (draftType==='Routine' && recurEnabled) {
+        const exc = new Set((recurExceptions||'').split(',').map(s=>s.trim()).filter(Boolean)); const until = recurUntil.trim() || undefined;
+        const weekdays = recurWeekdays.length?recurWeekdays:[weekdayFromISO(draftDate)];
+        const clones = materializeWeeklyRoutine({ ...baseEvent }, weekdays, draftDate, until, exc, 120, seedSeriesId);
+        nextList = [...prev, ...clones];
+      } else { nextList = [...prev, baseEvent]; }
+    }
+    const ok = await confirmConflicts(nextList, prev); if (!ok) return;
+
+    setEvents(nextList); setEditorOpen(false); setSelectedEvent(null);
   }
 
-  /* ---------- Pretty Confirm ---------- */
-  function ConfirmModal({
-    visible,
-    title = 'Bist du sicher?',
-    message,
-    confirmText = 'Löschen',
-    cancelText = 'Abbrechen',
-    onConfirm,
-    onCancel,
-  }: {
-    visible: boolean; title?: string; message?: string;
-    confirmText?: string; cancelText?: string;
-    onConfirm: () => void; onCancel: () => void;
-  }) {
-    return (
-      <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-        <View style={styles.modalBackdrop}>
-          <ThemedView style={[styles.modalCard, { gap: 12 }]}>
-            <ThemedText type="subtitle" style={{ color: '#fff' }}>{title}</ThemedText>
-            {!!message && <ThemedText style={{ color: '#c8d6c3' }}>{message}</ThemedText>}
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12 }}>
-              <Pressable onPress={onCancel} style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}>
-                <ThemedText style={{ color: '#c8d6c3' }}>{cancelText}</ThemedText>
-              </Pressable>
-              <Pressable onPress={onConfirm} style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}>
-                <ThemedText style={{ color: '#f38b82' }}>{confirmText}</ThemedText>
-              </Pressable>
-            </View>
-          </ThemedView>
-        </View>
-      </Modal>
-    );
-  }
-  function requestDelete(id: string) { setPendingDeleteId(id); setConfirmOpen(true); }
-  function commitDelete() {
-    if (pendingDeleteId) setEvents(prev => prev.filter(e => e.id !== pendingDeleteId));
-    setPendingDeleteId(null);
-    setConfirmOpen(false);
-    setSelectedEvent(null);
-  }
+  const weekStart = useMemo(() => startOfWeekISO(date), [date]);
 
-  /* =============================================================================
-     UI
-  ============================================================================= */
   return (
     <ThemedView style={styles.container}>
-      {/* Kopfzeile */}
       <View style={styles.header}>
         <ThemedText type="title" style={{ color: '#fff' }}>Kalender</ThemedText>
         <ThemedText style={{ color: MATCHA }}>🍵 Keep it cozy</ThemedText>
       </View>
 
-      {/* Alles scrollfähig */}
-      <ScrollView contentContainerStyle={{ gap: 12, paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
-        {/* GRID: linke Spalte + rechte Spalte */}
-        <View style={styles.gridRow}>
-          {/* LEFT: Switch + Liste (Timeline / Monat) + Routines */}
-          <View style={styles.leftCol}>
+      <ScrollView ref={pageScrollRef} contentContainerStyle={{ gap: 12, paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
+        <View style={[styles.gridRow, !layout.twoColumn && { flexDirection:'column' }]}>
+          {/* LEFT */}
+          <View style={[styles.leftCol, { width: layout.twoColumn ? layout.leftWidth : '100%' }]}>
             <ThemedView style={styles.card}>
               <View style={styles.segment}>
-                {(['DAY', 'MONTH'] as const).map(mode => (
-                  <Pressable
-                    key={mode}
-                    onPress={() => setLeftMode(mode)}
-                    style={[styles.segmentBtn, leftMode === mode && styles.segmentBtnActive]}
-                  >
-                    <ThemedText style={{ color: leftMode === mode ? '#0d0d0d' : '#c8d6c3' }}>
-                      {mode === 'DAY' ? 'Tagesplaner' : 'Monatsevents'}
+                {(['DAY','MONTH'] as const).map(mode => (
+                  <Pressable key={mode} onPress={() => setLeftMode(mode)} style={[styles.segmentBtn, leftMode===mode && styles.segmentBtnActive]} accessibilityRole="button">
+                    <ThemedText style={{ color: leftMode===mode ? '#0d0d0d' : '#c8d6c3' }}>
+                      {mode==='DAY' ? 'Tagesplaner' : 'Monatsevents'}
                     </ThemedText>
                   </Pressable>
                 ))}
               </View>
             </ThemedView>
 
+            {dayConflictsList.length>0 && (
+              <ThemedView style={[styles.card, { borderLeftWidth:4, borderLeftColor:'#f38b82', backgroundColor:'#2a201f' }]}>
+                <ThemedText type="defaultSemiBold" style={{ color:'#ffd2cd', marginBottom:6 }}>⚠️ {dayConflictsList.length} Überschneidung(en) heute</ThemedText>
+                {dayConflictsList.slice(0,4).map((c,idx)=>(
+                  <ThemedText key={idx} style={{ color:'#ffd2cd', fontSize:12 }}>• {c.a.start} {c.a.title} ↔ {c.b.start} {c.b.title}</ThemedText>
+                ))}
+                {dayConflictsList.length>4 && (<ThemedText style={{ color:'#ffd2cd', fontSize:12, opacity:0.8 }}>…</ThemedText>)}
+              </ThemedView>
+            )}
+
             <ThemedView style={[styles.card, { marginTop: 12 }]}>
-              {leftMode === 'DAY' ? (
-                <>
-                  {/* Timeline für Events + Routines */}
-                  <ThemedText type="defaultSemiBold" style={{ color: '#e9efe6', marginBottom: 8 }}>Heute</ThemedText>
-                  {/* Merge events + routines for today */}
-                  <TimelineDay
-                    events={[...routinesForDate(date), ...dayEvents].sort((a,b)=>a.start.localeCompare(b.start))}
-                    nowISO={date}
-                    onPressItem={(ev)=> {
-                      // if routine-event clicked, open routine details -> find base routine
-                      if (ev.id.startsWith('routine:')) {
-                        // show routine quick actions: mark done
-                        const parts = ev.id.split(':'); // routine:id:iso
-                        const rid = parts[1];
-                        // quick-mark done:
-                        toggleRoutineDoneForDate(rid, date);
-                      } else {
-                        setSelectedEvent(ev);
-                      }
-                    }}
-                    onAdd={() => openNewEditor(date)}
+              {leftMode==='DAY' ? (
+                dayEvents.length === 0 ? (
+                  <ThemedText style={{ color:'#9aa39a' }}>Keine Termine 🎉</ThemedText>
+                ) : (
+                  <FlatList
+                    data={dayEvents}
+                    keyExtractor={(e) => e.id}
+                    ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                    renderItem={({ item }) => (
+                      <Pressable onPress={() => setSelectedEvent(item)} accessibilityRole="button">
+                        <View style={[styles.eventRow, { borderLeftColor: item.color || MATCHA }]}>
+                          <View style={{ width: 64 }}>
+                            <ThemedText style={{ color:'#e9efe6' }}>{item.start}</ThemedText>
+                            <ThemedText style={{ color:'#c8d6c3', fontSize:12 }}>{item.end}</ThemedText>
+                          </View>
+                          <View style={{ flex:1 }}>
+                            <ThemedText type="defaultSemiBold" style={{ color:'#fff' }}>{item.symbol ? `${item.symbol} ` : ''}{item.title}</ThemedText>
+                            <ThemedText style={{ color:'#c8d6c3', fontSize:12 }}>{item.type}{item.locationName ? ` • ${item.locationName}` : ''}</ThemedText>
+                          </View>
+                        </View>
+                      </Pressable>
+                    )}
                   />
-                </>
+                )
               ) : (
                 <SectionList
                   sections={buildMonthSections(events, date)}
                   keyExtractor={(it) => it.id}
-                  nestedScrollEnabled
                   renderSectionHeader={({ section }) => (
-                    <ThemedText type="defaultSemiBold" style={{ color: '#e9efe6', marginTop: 10 }}>
-                      {humanDayShort(section.title)}
-                    </ThemedText>
+                    <ThemedText type="defaultSemiBold" style={{ color:'#e9efe6', marginTop: 10 }}>{humanDayShort(section.title)}</ThemedText>
                   )}
                   ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
                   SectionSeparatorComponent={() => <View style={{ height: 8 }} />}
                   renderItem={({ item }) => (
-                    <Pressable onPress={() => setSelectedEvent(item)}>
+                    <Pressable onPress={() => setSelectedEvent(item)} accessibilityRole="button">
                       <View style={[styles.weekEventPill, { borderLeftColor: item.color || MATCHA }]}>
-                        <ThemedText style={{ color: '#e9efe6', fontSize: 12 }}>
-                          {item.start} {item.symbol ? item.symbol + ' ' : ''}{item.title}
-                        </ThemedText>
+                        <ThemedText style={{ color:'#e9efe6', fontSize:12 }}>{item.start} {item.symbol ? item.symbol+' ' : ''}{item.title}</ThemedText>
                       </View>
                     </Pressable>
                   )}
-                  ListEmptyComponent={<ThemedText style={{ color: '#9aa39a' }}>Keine Einträge</ThemedText>}
+                  ListEmptyComponent={<ThemedText style={{ color:'#9aa39a' }}>Keine Einträge</ThemedText>}
                 />
               )}
             </ThemedView>
 
-            {/* ROUTINES CARD */}
             <ThemedView style={[styles.card, { marginTop: 12 }]}>
-              <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-                <ThemedText type="subtitle" style={{ color:'#fff' }}>Routinen</ThemedText>
-                <Pressable onPress={() => openNewRoutineEditor()}><ThemedText style={{ color: MATCHA }}>+ Neu</ThemedText></Pressable>
+              <View style={{ flexDirection:'row', justifyContent:'space-between', marginBottom: 8, flexWrap:'wrap', gap:12 }}>
+                <ThemedText type="subtitle" style={{ color:'#fff' }}>{formatHuman(date)}</ThemedText>
+                <View style={{ flexDirection:'row', gap:12 }}>
+                  <Pressable onPress={() => setDate(todayISO())}><ThemedText style={{ color: MATCHA }}>Heute</ThemedText></Pressable>
+                  <Pressable onPress={() => openNewEditor(date)}><ThemedText style={{ color: MATCHA }}>+ Termin</ThemedText></Pressable>
+                  <Pressable onPress={() => openNewEditor(date,'Routine')}><ThemedText style={{ color: MATCHA }}>+ Routine</ThemedText></Pressable>
+                </View>
               </View>
-
-              {routines.length === 0 ? (
-                <ThemedText style={{ color:'#9aa39a' }}>Keine Routinen</ThemedText>
-              ) : (
-                <FlatList
-                  data={routines}
-                  keyExtractor={(r) => r.id}
-                  ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                  renderItem={({ item }) => {
-                    const scheduledToday = (() => {
-                      const override = item.overrides?.[date];
-                      const weekday = new Date(date + 'T00:00:00').getDay();
-                      return (!!override) || item.weekdays.includes(weekday);
-                    })();
-                    const timeForToday = item.overrides?.[date] ?? item.defaultTime;
-                    const done = isRoutineDone(item.id, date);
-                    return (
-                      <View style={{ flexDirection:'row', alignItems:'center', justifyContent:'space-between' }}>
-                        <Pressable onPress={() => openNewRoutineEditor(item)} style={{ flex:1 }}>
-                          <View style={{ flexDirection:'row', gap:10, alignItems:'center' }}>
-                            <View style={{ width:44, height:44, borderRadius:10, backgroundColor:item.color || '#333', alignItems:'center', justifyContent:'center' }}>
-                              <ThemedText>{item.symbol}</ThemedText>
-                            </View>
-                            <View style={{ flex:1 }}>
-                              <ThemedText type="defaultSemiBold" style={{ color:'#fff' }}>{item.title}</ThemedText>
-                              <ThemedText style={{ color:'#c8d6c3', fontSize:12 }}>
-                                {timeForToday} {scheduledToday ? '' : '(nicht heute)'}
-                              </ThemedText>
-                            </View>
-                          </View>
-                        </Pressable>
-
-                        <View style={{ flexDirection:'row', alignItems:'center', gap:10 }}>
-                          <Pressable onPress={() => toggleRoutineDoneForDate(item.id, date)} style={({ pressed })=>[{ opacity: pressed ? 0.7 : 1 }]}>
-                            <View style={{ width:36, height:36, borderRadius:18, borderWidth:2, borderColor: done ? MATCHA : '#555', alignItems:'center', justifyContent:'center' }}>
-                              <ThemedText style={{ color: done ? MATCHA : '#c8d6c3' }}>{done ? '✓' : ''}</ThemedText>
-                            </View>
-                          </Pressable>
-                          <Pressable onPress={() => removeRoutine(item.id)} style={({ pressed })=>[{ opacity: pressed ? 0.7 : 1 }]}>
-                            <ThemedText style={{ color:'#f38b82' }}>🗑️</ThemedText>
-                          </Pressable>
-                        </View>
-                      </View>
-                    );
-                  }}
-                />
-              )}
+              <TimelineDay items={dayEvents} dateISO={date} doneSet={doneSet} onToggleDone={onToggleDone} onPressItem={onPressItem} onAdd={onAdd} />
             </ThemedView>
           </View>
 
-          {/* RIGHT: oben Kalender + Bild, darunter Week + Bilder */}
-          <View style={styles.rightCol}>
-            {/* Top row: Kalender + Bild */}
-            <View style={[styles.topRightRow, isNarrow && { flexDirection: 'column' }]}>
+          {/* RIGHT */}
+          <View style={[styles.rightCol, !layout.twoColumn && { width:'100%' }]}>
+            <View style={[styles.topRightRow, !layout.twoColumn && { flexDirection:'column' }]}>
               <ThemedView style={[styles.card, styles.calCard]}>
                 <Calendar
                   current={date}
                   onDayPress={(d: DateObject) => setDate(d.dateString)}
                   markedDates={marked}
-                  theme={{
-                    backgroundColor: CARD,
-                    calendarBackground: CARD,
-                    textSectionTitleColor: '#c8d6c3',
-                    dayTextColor: '#e9efe6',
-                    monthTextColor: '#e9efe6',
-                    todayTextColor: '#f7d9e3',
-                    selectedDayBackgroundColor: MATCHA,
-                    selectedDayTextColor: '#0d0d0d',
-                    arrowColor: MATCHA,
-                  }}
+                  markingType="multi-dot"
+                  theme={{ backgroundColor: CARD, calendarBackground: CARD, textSectionTitleColor: '#c8d6c3', dayTextColor: '#e9efe6', monthTextColor: '#e9efe6', todayTextColor: '#f7d9e3', selectedDayBackgroundColor: MATCHA, selectedDayTextColor: '#0d0d0d', arrowColor: MATCHA }}
                   firstDay={1}
                   hideExtraDays
                   style={{ borderRadius: 12 }}
                 />
               </ThemedView>
 
-              <ThemedView style={[styles.card, styles.sideImageCard]}>
-                <Image source={require('@/assets/images/test1.png')} style={styles.sideImage} resizeMode="cover" />
-              </ThemedView>
+              {layout.showSideImages && (
+                <ThemedView style={[styles.card, styles.sideImageCard]}>
+                  <Image source={require('@/assets/images/test1.png')} style={styles.sideImage} resizeMode="cover" />
+                </ThemedView>
+              )}
             </View>
 
-            {/* Wochenplaner */}
             <ThemedView style={[styles.card, styles.weekPlannerCard]}>
               <View style={styles.weekHeader}>
-                <ThemedText type="subtitle" style={{ color: '#fff' }}>Wochenplaner</ThemedText>
-                <View style={{ flexDirection: 'row', gap: 12 }}>
+                <ThemedText type="subtitle" style={{ color:'#fff' }}>Wochenplaner</ThemedText>
+                <View style={{ flexDirection:'row', gap:12 }}>
                   <Pressable onPress={() => setDate(addDaysISO(-7, date))}><ThemedText style={{ color: MATCHA }}>←</ThemedText></Pressable>
                   <Pressable onPress={() => setDate(addDaysISO(7, date))}><ThemedText style={{ color: MATCHA }}>→</ThemedText></Pressable>
                   <Pressable onPress={() => setDate(todayISO())}><ThemedText style={{ color: MATCHA }}>Heute</ThemedText></Pressable>
@@ -753,29 +710,23 @@ export default function CalendarScreen() {
               </View>
 
               <FlatList
-                data={range7(startOfWeekISO(date))}
+                data={range7(weekStart)}
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 keyExtractor={(d) => d.iso}
                 contentContainerStyle={{ gap: 12 }}
-                nestedScrollEnabled
                 renderItem={({ item }) => {
-                  const list = events
-                    .filter(e => e.date === item.iso)
-                    .concat(routinesForDate(item.iso))
-                    .sort((a, b) => a.start.localeCompare(b.start));
+                  const list = events.filter(e => e.date === item.iso).sort((a,b)=>a.start.localeCompare(b.start));
                   const isSelected = item.iso === date;
                   return (
-                    <Pressable onPress={() => setDate(item.iso)}>
-                      <View style={[styles.weekDayCard, isSelected && { borderColor: MATCHA }]}>
-                        <ThemedText style={{ color: '#e9efe6', marginBottom: 6 }}>{item.label}</ThemedText>
+                    <Pressable onPress={() => setDate(item.iso)} accessibilityRole="button">
+                      <View style={[styles.weekDayCard, { width: layout.weekCardWidth }, isSelected && { borderColor: MATCHA }]}>
+                        <ThemedText style={{ color:'#e9efe6', marginBottom:6 }}>{item.label}</ThemedText>
                         {list.length === 0 ? (
-                          <ThemedText style={{ color: '#9aa39a', fontSize: 12 }}>—</ThemedText>
+                          <ThemedText style={{ color:'#9aa39a', fontSize:12 }}>—</ThemedText>
                         ) : list.map(ev => (
                           <View key={ev.id} style={[styles.weekEventPill, { borderLeftColor: ev.color || MATCHA }]}>
-                            <ThemedText style={{ color: '#e9efe6', fontSize: 12 }}>
-                              {ev.start} {ev.symbol ? ev.symbol + ' ' : ''}{ev.title}
-                            </ThemedText>
+                            <ThemedText style={{ color:'#e9efe6', fontSize:12 }}>{ev.start} {ev.symbol ? ev.symbol+' ' : ''}{ev.title}</ThemedText>
                           </View>
                         ))}
                       </View>
@@ -785,15 +736,40 @@ export default function CalendarScreen() {
               />
             </ThemedView>
 
-            {/* Untere Bilder (nebeneinander / auf Mobile untereinander) */}
-            <View style={[styles.bottomRow, isNarrow && { flexDirection: 'column' }]}>
-              <ThemedView style={[styles.card, styles.bottomImageCard]}>
-                <Image source={require('@/assets/images/test1.png')} style={styles.bottomImage} resizeMode="cover" />
-              </ThemedView>
-              <ThemedView style={[styles.card, styles.bottomImageCard]}>
-                <Image source={require('@/assets/images/test2.png')} style={styles.bottomImage} resizeMode="cover" />
-              </ThemedView>
-            </View>
+            {layout.showSideImages && (
+              <View style={styles.bottomRow}>
+                <ThemedView style={[styles.card, styles.bottomImageCard]}>
+                {dayEvents.length === 0 ? (
+                  <ThemedText style={{ color:'#9aa39a' }}>Keine Termine 🎉</ThemedText>
+                ) : (
+                  <FlatList
+                    data={dayEvents}
+                    keyExtractor={(e) => e.id}
+                    ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                    renderItem={({ item }) => (
+                      <Pressable onPress={() => setSelectedEvent(item)} accessibilityRole="button">
+                        <View style={[styles.eventRow, { borderLeftColor: item.color || MATCHA }]}>
+                          <View style={{ width: 64 }}>
+                            <ThemedText style={{ color:'#e9efe6' }}>{item.start}</ThemedText>
+                            <ThemedText style={{ color:'#c8d6c3', fontSize:12 }}>{item.end}</ThemedText>
+                          </View>
+                          <View style={{ flex:1 }}>
+                            <ThemedText type="defaultSemiBold" style={{ color:'#fff' }}>{item.symbol ? `${item.symbol} ` : ''}{item.title}</ThemedText>
+                            <ThemedText style={{ color:'#c8d6c3', fontSize:12 }}>{item.type}{item.locationName ? ` • ${item.locationName}` : ''}</ThemedText>
+                          </View>
+                        </View>
+                      </Pressable>
+                    )}
+                  />
+                )
+              }
+
+                </ThemedView>
+                <ThemedView style={[styles.card, styles.bottomImageCard]}>
+                  <Image source={require('@/assets/images/test2.png')} style={styles.bottomImage} resizeMode="cover" />
+                </ThemedView>
+              </View>
+            )}
           </View>
         </View>
       </ScrollView>
@@ -802,29 +778,31 @@ export default function CalendarScreen() {
       <Modal visible={!!selectedEvent} transparent animationType="fade" onRequestClose={() => setSelectedEvent(null)}>
         <View style={styles.modalBackdrop}>
           <ThemedView style={[styles.modalCard, { gap: 10 }]}>
-            <ThemedText type="subtitle" style={{ color: '#fff' }}>
-              {selectedEvent?.symbol ? `${selectedEvent.symbol} ` : ''}{selectedEvent?.title}
-            </ThemedText>
-            <ThemedText style={{ color: '#e9efe6' }}>
-              {selectedEvent?.date} • {selectedEvent?.start}–{selectedEvent?.end}
-            </ThemedText>
-            {!!selectedEvent?.type && <ThemedText style={{ color: '#c8d6c3' }}>{selectedEvent.type}</ThemedText>}
+            <ThemedText type="subtitle" style={{ color: '#fff' }}>{selectedEvent?.symbol ? `${selectedEvent.symbol} ` : ''}{selectedEvent?.title}</ThemedText>
+            <ThemedText style={{ color: '#e9efe6' }}>{selectedEvent?.date} • {selectedEvent?.start}–{selectedEvent?.end}</ThemedText>
+            {!!selectedEvent?.type && <ThemedText style={{ color: '#c8d6c3' }}>{selectedEvent.type}{selectedEvent?.seriesId?' • Serie':''}</ThemedText>}
             {!!selectedEvent?.locationName && <ThemedText style={{ color: '#c8d6c3' }}>Ort: {selectedEvent.locationName}</ThemedText>}
             {!!selectedEvent?.note && <ThemedText style={{ color: '#c8d6c3' }}>{selectedEvent?.note}</ThemedText>}
 
-            {!!selectedEvent?.location && (
-              <View style={{ marginTop: 12 }}>
-                <MapPicker coordinate={selectedEvent.location} title={selectedEvent.locationName || 'Ort'} />
-              </View>
-            )}
-
-            <View style={{ flexDirection: 'row', gap: 16, justifyContent: 'flex-end', marginTop: 12 }}>
-              <Pressable onPress={() => { const ev = selectedEvent!; setSelectedEvent(null); openEditEditor(ev); }} style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}>
-                <ThemedText style={{ color: MATCHA }}>Bearbeiten</ThemedText>
-              </Pressable>
-              <Pressable onPress={() => requestDelete(selectedEvent!.id)} style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}>
-                <ThemedText style={{ color: '#f38b82' }}>Löschen</ThemedText>
-              </Pressable>
+            <View style={{ flexDirection: 'row', gap: 16, justifyContent: 'flex-end', flexWrap:'wrap', marginTop: 12 }}>
+              {selectedEvent?.type==='Routine' && selectedEvent?.seriesId && (<>
+                <Pressable onPress={()=>{ const ev = selectedEvent!; setEvents(prev => prev.map(e => (e.seriesId===ev.seriesId && e.date>=ev.date) ? { ...e, title: ev.title, color: ev.color, symbol: ev.symbol } : e )); setSelectedEvent(null); }} style={({pressed})=>[{ opacity: pressed?0.7:1 }]}>
+                  <ThemedText style={{ color: MATCHA }}>Serie ab hier aktualisieren</ThemedText>
+                </Pressable>
+                <Pressable onPress={()=>{ const sid = selectedEvent!.seriesId!; setEvents(prev => prev.filter(e => e.seriesId !== sid)); setSelectedEvent(null); }} style={({pressed})=>[{ opacity: pressed?0.7:1 }]}>
+                  <ThemedText style={{ color: '#f38b82' }}>Serie löschen</ThemedText>
+                </Pressable>
+              </>)}
+              {selectedEvent && (
+                <Pressable onPress={() => { const ev = selectedEvent; setSelectedEvent(null); openEditEditor(ev); }} style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}>
+                  <ThemedText style={{ color: MATCHA }}>Bearbeiten</ThemedText>
+                </Pressable>
+              )}
+              {selectedEvent && (
+                <Pressable onPress={() => { setEvents(prev => prev.filter(e => e.id !== selectedEvent.id)); setSelectedEvent(null); }} style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}>
+                  <ThemedText style={{ color: '#f38b82' }}>Löschen</ThemedText>
+                </Pressable>
+              )}
               <Pressable onPress={() => setSelectedEvent(null)} style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}>
                 <ThemedText style={{ color: '#c8d6c3' }}>Schließen</ThemedText>
               </Pressable>
@@ -836,176 +814,102 @@ export default function CalendarScreen() {
       {/* Editor-Modal */}
       <Modal visible={editorOpen} transparent animationType="slide" onRequestClose={() => setEditorOpen(false)}>
         <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <ThemedView style={[styles.modalCard, { gap: 12 }]}>
-            <ThemedText type="subtitle" style={{ color: '#fff' }}>
-              {editingId ? 'Termin bearbeiten' : 'Neuer Termin'}
-            </ThemedText>
-            <ThemedText style={{ color: '#c8d6c3' }}>{formatHuman(draftDate)}</ThemedText>
-
-            {/* Titel */}
-            <TextInput
-              placeholder="Titel*"
-              placeholderTextColor="#9aa39a"
-              value={draftTitle}
-              onChangeText={setDraftTitle}
-              style={styles.input}
-            />
-
-            {/* Typ Umschalter */}
-            <View style={styles.segment}>
-              {(['Termin', 'Event', 'Routine'] as EventType[]).map((t) => (
-                <Pressable key={t} onPress={() => setDraftType(t)} style={[styles.segmentBtn, draftType === t && styles.segmentBtnActive]}>
-                  <ThemedText style={{ color: draftType === t ? '#0d0d0d' : '#c8d6c3' }}>{t}</ThemedText>
-                </Pressable>
-              ))}
+          <ThemedView style={[styles.modalCard, { paddingBottom:0 }]}>
+            <View style={{ paddingHorizontal:16, paddingTop:12, paddingBottom:8, borderBottomWidth:1, borderBottomColor:'#243027' }}>
+              <ThemedText type="subtitle" style={{ color:'#fff' }}>{editingId ? 'Eintrag bearbeiten' : 'Neuer Eintrag'}</ThemedText>
+              <ThemedText style={{ color:'#c8d6c3' }}>{formatHuman(draftDate)}</ThemedText>
             </View>
 
-            {/* Zeiten */}
-            <View style={{ flexDirection: 'row', gap: 10 }}>
-              <TimeField label="Start" date={startDate} setDate={setStartDate} />
-              <TimeField label="Ende" date={endDate} setDate={setEndDate} />
-            </View>
+            <ScrollView contentContainerStyle={{ padding:16, gap:12, paddingBottom:20 }} style={{ maxHeight: '70vh' as any }}>
+              <TextInput placeholder="Titel*" placeholderTextColor="#9aa39a" value={draftTitle} onChangeText={setDraftTitle} style={styles.input} />
 
-            {/* Ort & Karte */}
-            <ThemedText style={{ color: '#c8d6c3' }}>
-              Ort wählen (Adresse eingeben und „Suchen“ drücken):
-            </ThemedText>
-            <MapPicker
-              // @ts-ignore: web/native Props unterscheiden sich leicht
-              query={locationName}
-              // @ts-ignore
-              onQueryChange={setLocationName}
-              coordinate={location}
-              // @ts-ignore
-              onResolved={(c: any) => setLocation(c)}
-              title={locationName || 'Ausgewählter Ort'}
-            />
-            <TextInput
-              placeholder="Ortsname (optional)"
-              placeholderTextColor="#9aa39a"
-              value={locationName}
-              onChangeText={setLocationName}
-              style={styles.input}
-            />
-
-            {/* Symbol & Farbe */}
-            <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-              <ThemedText style={{ color: '#c8d6c3' }}>Symbol:</ThemedText>
-              <View style={styles.symbolGrid}>
-                {SYMBOLS.map((sym) => (
-                  <TouchableOpacity
-                    key={sym}
-                    onPress={() => setDraftSymbol(sym)}
-                    style={[styles.symbolItem, draftSymbol === sym && styles.symbolItemActive]}
-                  >
-                    <ThemedText style={{ fontSize: 18 }}>{sym}</ThemedText>
-                  </TouchableOpacity>
+              <View style={styles.segment}>
+                {(['Termin', 'Event', 'Routine'] as EventType[]).map((t) => (
+                  <Pressable key={t} onPress={() => setDraftType(t)} style={[styles.segmentBtn, draftType === t && styles.segmentBtnActive]} accessibilityRole="button">
+                    <ThemedText style={{ color: draftType === t ? '#0d0d0d' : '#c8d6c3' }}>{t}</ThemedText>
+                  </Pressable>
                 ))}
               </View>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-              <ThemedText style={{ color: '#c8d6c3' }}>Farbe:</ThemedText>
-              {LEAF_COLORS.map((c) => (
-                <TouchableOpacity
-                  key={c}
-                  onPress={() => setDraftColor(c)}
-                  style={[styles.colorDot, { backgroundColor: c, borderColor: draftColor === c ? '#fff' : 'transparent' }]}
-                />
-              ))}
-            </View>
 
-            {/* Notiz */}
-            <TextInput
-              placeholder="Notiz (optional)"
-              placeholderTextColor="#9aa39a"
-              value={note}
-              onChangeText={setNote}
-              style={[styles.input, { height: 80 }]}
-              multiline
-            />
-
-            {/* Actions */}
-            <View style={{ flexDirection: 'row', gap: 12, justifyContent: 'flex-end' }}>
-              <Pressable onPress={() => setEditorOpen(false)} style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}>
-                <ThemedText style={{ color: '#c8d6c3' }}>Abbrechen</ThemedText>
-              </Pressable>
-              <Pressable onPress={save} style={({ pressed }) => [{ opacity: pressed ? 0.6 : 1 }]}>
-                <ThemedText style={{ color: MATCHA }}>{editingId ? 'Speichern' : 'Hinzufügen'}</ThemedText>
-              </Pressable>
-            </View>
-          </ThemedView>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* ROUTINE EDITOR Modal */}
-      <Modal visible={routineEditorOpen} transparent animationType="slide" onRequestClose={() => setRoutineEditorOpen(false)}>
-        <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <ThemedView style={[styles.modalCard, { gap: 12 }]}>
-            <ThemedText type="subtitle" style={{ color: '#fff' }}>{editingRoutineId ? 'Routine bearbeiten' : 'Neue Routine'}</ThemedText>
-
-            <TextInput placeholder="Titel" placeholderTextColor="#9aa39a" value={rTitle} onChangeText={setRTitle} style={styles.input} />
-
-            <View style={{ flexDirection:'row', gap: 10 }}>
-              <TimeField label="Standardzeit" date={dateFromISOAndTime(todayISO(), rTime)} setDate={(d)=>setRTime(formatHHMM(d))} />
-            </View>
-
-            <ThemedText style={{ color:'#c8d6c3', marginTop: 6 }}>Wochentage</ThemedText>
-            <View style={{ flexDirection:'row', gap:8, flexWrap:'wrap', marginTop:8 }}>
-              {['So','Mo','Di','Mi','Do','Fr','Sa'].map((lab, idx) => {
-                const active = rWeekdays.includes(idx);
-                return (
-                  <Pressable key={lab} onPress={() => toggleWeekday(idx)} style={[{ paddingVertical:8, paddingHorizontal:10, borderRadius:8, borderWidth:1, borderColor: active?MATCHA:'#2b312d' }]}>
-                    <ThemedText style={{ color: active ? '#0d0d0d' : '#c8d6c3' }}>{lab}</ThemedText>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            <ThemedText style={{ color:'#c8d6c3', marginTop: 8 }}>Ausnahmen (Datum => andere Zeit)</ThemedText>
-            <View style={{ gap:8 }}>
-              {/* Simple rows for overrides: show existing and allow manual add */}
-              {Object.keys(rOverrides || {}).map(k => (
-                <View key={k} style={{ flexDirection:'row', gap:8, alignItems:'center' }}>
-                  <ThemedText style={{ color:'#e9efe6' }}>{k}</ThemedText>
-                  <TextInput value={rOverrides[k]} onChangeText={(val)=>setROverrides(prev=>({...prev,[k]:val}))} placeholder="HH:MM" placeholderTextColor="#9aa39a" style={[styles.input,{flex:1}]} />
-                  <Pressable onPress={()=>setROverrides(prev=>{ const p={...prev}; delete p[k]; return p; })}><ThemedText style={{ color:'#f38b82' }}>✖</ThemedText></Pressable>
+              {draftType!=='Routine' ? (
+                <View style={{ flexDirection: (bp==='xs' || bp==='sm') ? 'column' : 'row', gap: 10 }}>
+                  <TimeField label="Start" date={startDate} setDate={setStartDate} />
+                  <TimeField label="Ende" date={endDate} setDate={setEndDate} />
                 </View>
-              ))}
-              <View style={{ flexDirection:'row', gap:8, alignItems:'center' }}>
-                <TextInput placeholder="YYYY-MM-DD" placeholderTextColor="#9aa39a" style={[styles.input,{flex:1}]} onSubmitEditing={(e:any)=>{
-                  const iso = e.nativeEvent.text;
-                  if (!iso.match(/^\d{4}-\d{2}-\d{2}$/)) { Alert.alert('Datum ungültig'); return; }
-                  setROverrides(prev=>({...prev, [iso]: rTime}));
-                }} />
-                <Pressable onPress={()=>{ /* nothing */ }}><ThemedText style={{ color: MATCHA }}>Hinzufügen</ThemedText></Pressable>
+              ) : (
+                <>
+                  <View style={{ flexDirection: (bp==='xs' || bp==='sm') ? 'column' : 'row', gap: 10 }}>
+                    <TimeField label="Start" date={startDate} setDate={setStartDate} />
+                    <View style={{ flex:1 }}>
+                      <ThemedText style={{ color:'#c8d6c3', marginBottom:4 }}>Dauer (Minuten)</ThemedText>
+                      <TextInput keyboardType="number-pad" placeholder="z.B. 15" placeholderTextColor="#9aa39a" value={String(routineDuration)} onChangeText={(v)=>setRoutineDuration(Math.max(1, parseInt(v||'0',10)||0))} style={styles.input} />
+                    </View>
+                  </View>
+
+                  <View style={{ backgroundColor:'#1f2421', borderRadius:12, padding:12, gap:10 }}>
+                    <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
+                      <ThemedText style={{ color:'#e9efe6' }}>Wiederholen</ThemedText>
+                      <Pressable onPress={()=>setRecurEnabled(v=>!v)} accessibilityRole="button">
+                        <ThemedText style={{ color: recurEnabled? MATCHA : '#c8d6c3' }}>{recurEnabled ? 'An' : 'Aus'}</ThemedText>
+                      </Pressable>
+                    </View>
+
+                    {recurEnabled && (<>
+                      <ThemedText style={{ color:'#c8d6c3' }}>Wochentage</ThemedText>
+                      <View style={{ flexDirection:'row', flexWrap:'wrap', gap:8 }}>
+                        {['Mo','Di','Mi','Do','Fr','Sa','So'].map((lbl,idx)=>{
+                          const val = idx+1; const on = recurWeekdays.includes(val);
+                          return (
+                            <Pressable key={lbl} onPress={()=>{ setRecurWeekdays(prev => on ? prev.filter(x=>x!==val) : [...prev, val].sort()); }} accessibilityRole="button">
+                              <View style={[ { paddingVertical:6, paddingHorizontal:10, borderRadius:10, backgroundColor:'#1b221e' }, on && { backgroundColor: MATCHA } ]}>
+                                <ThemedText style={{ color: on? '#0d0d0d' : '#e9efe6' }}>{lbl}</ThemedText>
+                              </View>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+
+                      <ThemedText style={{ color:'#c8d6c3', marginTop:6 }}>Ende-Datum (optional, YYYY-MM-DD)</ThemedText>
+                      <TextInput placeholder="z.B. 2025-12-31" placeholderTextColor="#9aa39a" value={recurUntil} onChangeText={setRecurUntil} style={styles.input} />
+
+                      <ThemedText style={{ color:'#c8d6c3' }}>Ausnahmen (Komma-getrennt, YYYY-MM-DD)</ThemedText>
+                      <TextInput placeholder="z.B. 2025-06-03,2025-06-10" placeholderTextColor="#9aa39a" value={recurExceptions} onChangeText={setRecurExceptions} style={styles.input} />
+                    </>)}
+                  </View>
+                </>
+              )}
+
+              <ThemedText style={{ color: '#c8d6c3' }}>Ort wählen (Adresse eingeben und „Suchen“ drücken):</ThemedText>
+              <MapPicker query={locationName} onQueryChange={setLocationName} coordinate={location} onResolved={(c: any) => setLocation(c)} title={locationName || 'Ausgewählter Ort'} />
+              <TextInput placeholder="Ortsname (optional)" placeholderTextColor="#9aa39a" value={locationName} onChangeText={setLocationName} style={styles.input} />
+
+              <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center', flexWrap:'wrap' }}>
+                <ThemedText style={{ color: '#c8d6c3' }}>Symbol:</ThemedText>
+                <View style={styles.symbolGrid}>
+                  {SYMBOLS.map((sym) => (
+                    <TouchableOpacity key={sym} onPress={() => setDraftSymbol(sym)} style={[styles.symbolItem, draftSymbol === sym && styles.symbolItemActive]}>
+                      <ThemedText style={{ fontSize: 18 }}>{sym}</ThemedText>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
-            </View>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap:'wrap' }}>
+                <ThemedText style={{ color: '#c8d6c3' }}>Farbe:</ThemedText>
+                {LEAF_COLORS.map((c) => (
+                  <TouchableOpacity key={c} onPress={() => setDraftColor(c)} style={[styles.colorDot, { backgroundColor: c, borderColor: draftColor === c ? '#fff' : 'transparent' }]} />
+                ))}
+              </View>
 
-            <View style={{ flexDirection:'row', gap: 8, alignItems:'center', marginTop:8 }}>
-              <Pressable onPress={() => setRActive(!rActive)} style={({pressed})=>[{ opacity: pressed?0.7:1 }]}>
-                <ThemedText style={{ color: rActive?MATCHA:'#c8d6c3' }}>{rActive ? 'Aktiv' : 'Inaktiv'}</ThemedText>
-              </Pressable>
-              <Pressable onPress={() => setRSymbol(sym => sym === '🪥' ? '🔁' : '🪥')}><ThemedText style={{ color:'#c8d6c3' }}>Symbol: {rSymbol}</ThemedText></Pressable>
-            </View>
+              <TextInput placeholder="Notiz (optional)" placeholderTextColor="#9aa39a" value={note} onChangeText={setNote} style={[styles.input, { height: 80 }]} multiline />
+            </ScrollView>
 
-            <View style={{ flexDirection:'row', gap:12, justifyContent:'flex-end' }}>
-              <Pressable onPress={()=>setRoutineEditorOpen(false)} style={({pressed})=>[{opacity: pressed?0.6:1}]}><ThemedText style={{color:'#c8d6c3'}}>Abbrechen</ThemedText></Pressable>
-              <Pressable onPress={saveRoutine} style={({pressed})=>[{opacity: pressed?0.6:1}]}><ThemedText style={{color: MATCHA}}>Speichern</ThemedText></Pressable>
+            <View style={{ padding:12, borderTopWidth:1, borderTopColor:'#243027', flexDirection:'row', justifyContent:'flex-end', gap:12 }}>
+              <Pressable onPress={()=>setEditorOpen(false)}><ThemedText style={{ color:'#c8d6c3' }}>Abbrechen</ThemedText></Pressable>
+              <Pressable onPress={save}><ThemedText style={{ color: MATCHA }}>{editingId ? 'Speichern' : 'Hinzufügen'}</ThemedText></Pressable>
             </View>
           </ThemedView>
         </KeyboardAvoidingView>
       </Modal>
-
-      {/* Pretty Confirm */}
-      <ConfirmModal
-        visible={confirmOpen}
-        title="Termin löschen?"
-        message="Das kann nicht rückgängig gemacht werden."
-        confirmText="Löschen"
-        cancelText="Abbrechen"
-        onCancel={() => { setConfirmOpen(false); setPendingDeleteId(null); }}
-        onConfirm={commitDelete}
-      />
     </ThemedView>
   );
 }
@@ -1017,45 +921,27 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG, padding: 12 },
   header: { paddingHorizontal: 4, gap: 4, marginBottom: 8 },
 
-  card: {
-    backgroundColor: CARD,
-    borderRadius: 16,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-  },
-
-  /* Layout Grid */
+  card: { backgroundColor: CARD, borderRadius: 16, padding: 12, shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
   gridRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
-  leftCol: { width: 320, gap: 12 },                // Sidebar fix (etwas breiter für routines)
-  rightCol: { flex: 1, gap: 12 },                  // Content
-  topRightRow: { flexDirection: 'row', gap: 12 },  // Kalender + Bild
 
-  /* Kalender + Bild oben rechts */
+  leftCol: { gap: 12 },
+  rightCol: { flex: 1, gap: 12 },
+  topRightRow: { flexDirection: 'row', gap: 12 },
   calCard: { flex: 1 },
   sideImageCard: { width: 320, overflow: 'hidden' },
   sideImage: { width: '100%', height: 220 },
 
-  /* Wochenplaner */
   weekPlannerCard: {},
   weekHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  weekDayCard: { width: 200, backgroundColor: '#1f2421', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: 'transparent' },
+  weekDayCard: { backgroundColor: '#1f2421', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: 'transparent' },
+  weekEventPill: { padding:8, backgroundColor:'#262b27', borderRadius:10, borderLeftWidth:3 },
 
-  /* Untere Bilder-Zeile */
   bottomRow: { flexDirection: 'row', gap: 12 },
   bottomImageCard: { flex: 1, overflow: 'hidden' },
   bottomImage: { width: '100%', height: 180 },
 
-  /* Event-Items Basics */
-  weekEventPill: { padding: 8, backgroundColor: '#262b27', borderRadius: 10, borderLeftWidth: 3 },
+  eventRow: { flexDirection:'row', alignItems:'flex-start', gap:12, padding:12, borderRadius:12, backgroundColor:'#212622', borderLeftWidth:4 },
 
-  /* Modals */
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
-  modalCard: { backgroundColor: CARD, borderRadius: 16, padding: 16 },
-
-  /* Inputs & Controls */
   input: { backgroundColor: '#1f2421', color: '#e9efe6', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
   segment: { flexDirection: 'row', backgroundColor: '#1f2421', borderRadius: 12, padding: 4, gap: 4 },
   segmentBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: 10 },
@@ -1064,6 +950,8 @@ const styles = StyleSheet.create({
   symbolGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   symbolItem: { width: 36, height: 36, borderRadius: 10, backgroundColor: '#1f2421', alignItems: 'center', justifyContent: 'center' },
   symbolItemActive: { borderWidth: 2, borderColor: MATCHA },
-
   timeButton: { backgroundColor: '#1f2421', borderRadius: 12, paddingVertical: 10, alignItems: 'center' },
+
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
+  modalCard: { backgroundColor: CARD, borderRadius: 16, padding: 16 },
 });
