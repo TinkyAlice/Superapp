@@ -594,18 +594,8 @@ export default function CalendarScreen() {
       <ScrollView ref={pageScrollRef} contentContainerStyle={{ gap: 12, paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
         <View style={[styles.gridRow, !layout.twoColumn && { flexDirection:'column' }]}>
           {/* LEFT */}
-          <View style={[styles.leftCol, { width: layout.twoColumn ? layout.leftWidth : '100%' }]}>
-            <ThemedView style={styles.card}>
-              <View style={styles.segment}>
-                {(['DAY','MONTH'] as const).map(mode => (
-                  <Pressable key={mode} onPress={() => setLeftMode(mode)} style={[styles.segmentBtn, leftMode===mode && styles.segmentBtnActive]} accessibilityRole="button">
-                    <ThemedText style={{ color: leftMode===mode ? '#0d0d0d' : '#c8d6c3' }}>
-                      {mode==='DAY' ? 'Tagesplaner' : 'Monatsevents'}
-                    </ThemedText>
-                  </Pressable>
-                ))}
-              </View>
-            </ThemedView>
+          <View >
+
 
             {dayConflictsList.length>0 && (
               <ThemedView style={[styles.card, { borderLeftWidth:4, borderLeftColor:'#f38b82', backgroundColor:'#2a201f' }]}>
@@ -617,53 +607,9 @@ export default function CalendarScreen() {
               </ThemedView>
             )}
 
-            <ThemedView style={[styles.card, { marginTop: 12 }]}>
-              {leftMode==='DAY' ? (
-                dayEvents.length === 0 ? (
-                  <ThemedText style={{ color:'#9aa39a' }}>Keine Termine 🎉</ThemedText>
-                ) : (
-                  <FlatList
-                    data={dayEvents}
-                    keyExtractor={(e) => e.id}
-                    ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                    renderItem={({ item }) => (
-                      <Pressable onPress={() => setSelectedEvent(item)} accessibilityRole="button">
-                        <View style={[styles.eventRow, { borderLeftColor: item.color || MATCHA }]}>
-                          <View style={{ width: 64 }}>
-                            <ThemedText style={{ color:'#e9efe6' }}>{item.start}</ThemedText>
-                            <ThemedText style={{ color:'#c8d6c3', fontSize:12 }}>{item.end}</ThemedText>
-                          </View>
-                          <View style={{ flex:1 }}>
-                            <ThemedText type="defaultSemiBold" style={{ color:'#fff' }}>{item.symbol ? `${item.symbol} ` : ''}{item.title}</ThemedText>
-                            <ThemedText style={{ color:'#c8d6c3', fontSize:12 }}>{item.type}{item.locationName ? ` • ${item.locationName}` : ''}</ThemedText>
-                          </View>
-                        </View>
-                      </Pressable>
-                    )}
-                  />
-                )
-              ) : (
-                <SectionList
-                  sections={buildMonthSections(events, date)}
-                  keyExtractor={(it) => it.id}
-                  renderSectionHeader={({ section }) => (
-                    <ThemedText type="defaultSemiBold" style={{ color:'#e9efe6', marginTop: 10 }}>{humanDayShort(section.title)}</ThemedText>
-                  )}
-                  ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
-                  SectionSeparatorComponent={() => <View style={{ height: 8 }} />}
-                  renderItem={({ item }) => (
-                    <Pressable onPress={() => setSelectedEvent(item)} accessibilityRole="button">
-                      <View style={[styles.weekEventPill, { borderLeftColor: item.color || MATCHA }]}>
-                        <ThemedText style={{ color:'#e9efe6', fontSize:12 }}>{item.start} {item.symbol ? item.symbol+' ' : ''}{item.title}</ThemedText>
-                      </View>
-                    </Pressable>
-                  )}
-                  ListEmptyComponent={<ThemedText style={{ color:'#9aa39a' }}>Keine Einträge</ThemedText>}
-                />
-              )}
-            </ThemedView>
 
-            <ThemedView style={[styles.card, { marginTop: 12 }]}>
+
+            <ThemedView style={[styles.card, { marginTop: 0 }]}>
               <View style={{ flexDirection:'row', justifyContent:'space-between', marginBottom: 8, flexWrap:'wrap', gap:12 }}>
                 <ThemedText type="subtitle" style={{ color:'#fff' }}>{formatHuman(date)}</ThemedText>
                 <View style={{ flexDirection:'row', gap:12 }}>
@@ -770,6 +716,42 @@ export default function CalendarScreen() {
                 </ThemedView>
               </View>
             )}
+                    {layout.showSideImages && (
+                      <View style={styles.bottomRow}>
+                        <ThemedView style={[styles.card, styles.bottomImageCard]}>
+                            <Image source={require('@/assets/images/test2.png')} style={styles.bottomImage} resizeMode="cover" />
+                        </ThemedView>
+                        <ThemedView style={[styles.card, styles.bottomImageCard]}>
+                                          <SectionList
+                                            sections={buildMonthSections(events, date)}
+                                            keyExtractor={(it) => it.id}
+                                            renderSectionHeader={({ section }) => (
+                                              <ThemedText type="defaultSemiBold" style={{ color:'#e9efe6', marginTop: 10 }}>{humanDayShort(section.title)}</ThemedText>
+                                            )}
+                                            ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+                                            SectionSeparatorComponent={() => <View style={{ height: 8 }} />}
+                                            renderItem={({ item }) => (
+                                              <Pressable onPress={() => setSelectedEvent(item)} accessibilityRole="button">
+                                                <View style={[styles.weekEventPill, { borderLeftColor: item.color || MATCHA }]}>
+                                                  <ThemedText style={{ color:'#e9efe6', fontSize:12 }}>{item.start} {item.symbol ? item.symbol+' ' : ''}{item.title}</ThemedText>
+                                                </View>
+                                              </Pressable>
+                                            )}
+                                            ListEmptyComponent={<ThemedText style={{ color:'#9aa39a' }}>Keine Einträge</ThemedText>}
+                                          />
+                        </ThemedView>
+                      </View>
+                    )}
+                                    {layout.showSideImages && (
+                                      <View style={styles.bottomRow}>
+                                        <ThemedView style={[styles.card, styles.bottomImageCard]}>
+                                            Vorschlag
+                                        </ThemedView>
+                                        <ThemedView style={[styles.card, styles.bottomImageCard]}>
+<Image source={require('@/assets/images/test2.png')} style={styles.bottomImage} resizeMode="cover" />
+                                        </ThemedView>
+                                      </View>
+                                    )}
           </View>
         </View>
       </ScrollView>
